@@ -1,0 +1,2 @@
+# GMAG
+Codigo para GMAG
