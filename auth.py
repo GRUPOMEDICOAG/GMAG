@@ -15,7 +15,6 @@ from __future__ import annotations
 import streamlit as st
 from supabase import create_client, Client
 
-
 def get_client() -> Client:
     if "supabase_client" not in st.session_state:
         st.session_state.supabase_client = create_client(
