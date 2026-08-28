@@ -71,6 +71,33 @@ Sin costo, sin tarjeta. Nota: la app "duerme" tras un rato sin visitas y
 tarda unos segundos en despertar en la siguiente visita — normal en el plan
 gratis, no afecta los datos guardados.
 
+## Novedades de esta versión
+
+**1) Colores institucionales** — tema aplicado vía `.streamlit/config.toml`
+(azul marino `#1F3864` + verde `#2E9E5B`, tomados del logo de GMAG). Si
+tienes los códigos hexadecimales exactos del manual de marca, edita ese
+archivo y ajústalos.
+
+**2) Fecha bloqueada en "hoy"** — ya no se puede cambiar libremente. Para
+capturar un día distinto (atrasado o futuro), hay que abrir "Capturar un
+día distinto" en la barra lateral e ingresar el **PIN de Admin**
+(`ADMIN_PIN` en `secrets.toml` — cámbialo por uno propio, el del ejemplo es
+solo ilustrativo). Una vez desbloqueada, se puede elegir cualquier fecha
+hasta que se le dé "Regresar a hoy y bloquear" o se cierre sesión.
+
+**3) Barra de progreso + botón Enviar** — arriba de las pestañas se ve el
+avance del día: 50% al guardar el Corte, 100% al guardar cualquier parte de
+Estadísticas. Al llegar a 100% aparece el botón **"Enviar"**, que marca el
+día como confirmado (columna `enviado` en la tabla `cortes`, visible en el
+consolidado de Admin). Si alguien edita el Corte o Estadísticas después de
+haber enviado, el estado vuelve a "no enviado" automáticamente — así Admin
+sabe si algo cambió después de la confirmación.
+
+**4) Selector de turnos que trabajaron** — en Estadísticas, antes de
+Primera Vez/Mostrador hay que elegir qué turnos (Base/Cubre/Imprevistos)
+trabajaron ese día. Solo esos se capturan y se guardan — ya no se mandan
+filas en ceros a la base de datos para turnos que no aplicaron.
+
 ## Cómo está organizado el código
 
 - `auth.py` — login/logout contra Supabase Auth. El cliente de Supabase se

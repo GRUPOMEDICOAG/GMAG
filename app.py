@@ -16,12 +16,21 @@ import db
 
 st.set_page_config(page_title="Corte de Caja – GMAG", page_icon="🧾", layout="wide")
 
+st.markdown(
+    """
+    <div style="background-color:#1F3864; padding:14px 20px; border-radius:8px; margin-bottom:8px;">
+        <span style="color:#FFFFFF; font-size:22px; font-weight:700;">🧾 Corte de Caja y Estadísticas</span>
+        <span style="color:#8FD9AE; font-size:16px; font-weight:600;"> · Grupo Médico AG</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ──────────────────────────────────────────────────────────────────────────
 # LOGIN
 # ──────────────────────────────────────────────────────────────────────────
 
 if not auth.esta_autenticado():
-    st.title("🧾 Corte de Caja y Estadísticas – Grupo Médico AG")
     st.caption("Inicia sesión con el correo y contraseña que te dio tu administrador.")
     with st.form("form_login"):
         correo = st.text_input("Correo")
@@ -40,19 +49,57 @@ sucursal = auth.sucursal_actual()
 es_admin = auth.es_admin()
 
 # ──────────────────────────────────────────────────────────────────────────
-# BARRA LATERAL
+# BARRA LATERAL — fecha fija en hoy, con candado por PIN para cambiarla
 # ──────────────────────────────────────────────────────────────────────────
+
+HOY = datetime.date.today()
+st.session_state.setdefault("fecha_desbloqueada", False)
 
 with st.sidebar:
     st.markdown(f"**Sucursal:** {sucursal}")
     st.markdown(f"**Rol:** {'Admin' if es_admin else 'Sucursal'}")
-    fecha = st.date_input("Fecha", value=datetime.date.today())
+    st.divider()
+
+    if not st.session_state.fecha_desbloqueada:
+        st.markdown(f"**Fecha:** {HOY.isoformat()} 🔒")
+        with st.expander("Capturar un día distinto"):
+            st.caption("Requiere el PIN de autorización de Admin.")
+            pin_ingresado = st.text_input("PIN", type="password", key="pin_fecha")
+            if st.button("Desbloquear fecha"):
+                if pin_ingresado and pin_ingresado == st.secrets.get("ADMIN_PIN", ""):
+                    st.session_state.fecha_desbloqueada = True
+                    st.rerun()
+                else:
+                    st.error("PIN incorrecto.")
+        fecha = HOY
+    else:
+        fecha = st.date_input("Fecha (desbloqueada)", value=HOY)
+        if st.button("🔒 Regresar a hoy y bloquear"):
+            st.session_state.fecha_desbloqueada = False
+            st.rerun()
+
     st.divider()
     if st.button("Cerrar sesión"):
         auth.cerrar_sesion()
         st.rerun()
 
 fecha_str = fecha.isoformat()
+
+corte_existente_glob = db.obtener_corte(client, sucursal, fecha_str)
+estadisticas_guardadas = db.existe_estadisticas_del_dia(client, sucursal, fecha_str)
+
+progreso = (50 if corte_existente_glob else 0) + (50 if estadisticas_guardadas else 0)
+st.progress(progreso / 100, text=f"Progreso del {fecha_str}: {progreso}% (Corte {'✅' if corte_existente_glob else '⬜'} · Estadísticas {'✅' if estadisticas_guardadas else '⬜'})")
+
+if progreso == 100:
+    if corte_existente_glob.get("enviado"):
+        marca_tiempo = (corte_existente_glob.get("enviado_en") or "")[:19].replace("T", " ")
+        st.success(f"✅ Día enviado{f' el {marca_tiempo} UTC' if marca_tiempo else ''}.")
+    else:
+        if st.button("📤 Enviar", type="primary"):
+            db.marcar_enviado(client, sucursal, fecha_str)
+            st.success("Enviado correctamente.")
+            st.rerun()
 
 etiquetas_tabs = ["Corte de Caja", "Estadísticas"]
 if es_admin:
@@ -65,7 +112,7 @@ tabs = st.tabs(etiquetas_tabs)
 
 with tabs[0]:
     st.subheader(f"Corte de Caja · {sucursal} · {fecha_str}")
-    corte_existente = db.obtener_corte(client, sucursal, fecha_str)
+    corte_existente = corte_existente_glob
 
     def _valor(campo, default=0.0):
         return float(corte_existente[campo]) if corte_existente else default
@@ -141,11 +188,27 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader(f"Estadísticas · {sucursal} · {fecha_str}")
-    corte_del_dia = db.obtener_corte(client, sucursal, fecha_str)
+    corte_del_dia = corte_existente_glob
+
+    turnos_guardados = db.medicos_con_datos(client, sucursal, fecha_str)
+    etiqueta_por_codigo = db.MEDICO_TIPOS_LABEL
+    codigo_por_etiqueta = {v: k for k, v in etiqueta_por_codigo.items()}
+    etiquetas_seleccion = st.multiselect(
+        "¿Qué turnos trabajaron hoy?",
+        options=[etiqueta_por_codigo[m] for m in db.MEDICO_TIPOS],
+        default=[etiqueta_por_codigo[m] for m in turnos_guardados],
+        key="turnos_del_dia",
+    )
+    turnos_seleccionados = [codigo_por_etiqueta[e] for e in etiquetas_seleccion]
+    if not turnos_seleccionados:
+        st.info("Selecciona al menos un turno para capturar Primera Vez y Mostrador.")
 
     sub = st.tabs(["Primera Vez", "Mostrador", "Subsecuentes", "Revisiones", "Promociones"])
 
-    def _tabla_canal_medico(categoria: str, prefijo: str) -> float:
+    def _tabla_canal_medico(categoria: str, prefijo: str, turnos: list) -> float:
+        if not turnos:
+            st.caption("Selecciona arriba qué turnos trabajaron hoy para capturar esta sección.")
+            return 0.0
         datos = db.obtener_detalle(client, sucursal, fecha_str, categoria)
         st.caption("Captura por turno y canal de canalización · # de pacientes y $")
         encabezado = st.columns([1.2] + [1] * len(db.CANALES))
@@ -154,7 +217,7 @@ with tabs[1]:
             encabezado[i].markdown(f"**{db.CANALES_LABEL[canal]}**")
 
         nuevo = {}
-        for medico in db.MEDICO_TIPOS:
+        for medico in turnos:
             fila = st.columns([1.2] + [1] * len(db.CANALES))
             fila[0].markdown(db.MEDICO_TIPOS_LABEL[medico])
             for i, canal in enumerate(db.CANALES, start=1):
@@ -174,15 +237,16 @@ with tabs[1]:
         total_ingreso = sum(v["ingreso"] for v in nuevo.values())
         st.markdown(f"**Total: {total_px} pacientes · ${total_ingreso:,.2f}**")
         if st.button(f"Guardar {prefijo}", key=f"guardar_{prefijo}"):
-            db.guardar_detalle(client, sucursal, fecha_str, categoria, nuevo)
+            db.guardar_detalle(client, sucursal, fecha_str, categoria, nuevo, turnos)
+            db.marcar_no_enviado(client, sucursal, fecha_str)
             st.success("Guardado.")
             st.rerun()
         return total_ingreso
 
     with sub[0]:
-        ingreso_1a = _tabla_canal_medico("1A", "1a")
+        ingreso_1a = _tabla_canal_medico("1A", "1a", turnos_seleccionados)
     with sub[1]:
-        ingreso_most = _tabla_canal_medico("MOSTRADOR", "mostrador")
+        ingreso_most = _tabla_canal_medico("MOSTRADOR", "mostrador", turnos_seleccionados)
 
     def _agregado(categoria: str, titulo: str, prefijo: str) -> float:
         datos = db.obtener_agregado(client, sucursal, fecha_str, categoria)
@@ -194,6 +258,7 @@ with tabs[1]:
             db.guardar_agregado(client, sucursal, fecha_str, categoria, {
                 "total_px": total_px, "esperados": esperados, "ingreso": ingreso,
             })
+            db.marcar_no_enviado(client, sucursal, fecha_str)
             st.success("Guardado.")
             st.rerun()
         return ingreso
@@ -239,6 +304,7 @@ with tabs[1]:
                 precio_unit = precios_catalogo.get(nombre, (importe / frascos) if frascos else 0.0)
                 filas.append({"promocion": nombre, "frascos": frascos, "precio_unitario": precio_unit, "importe": importe})
             db.guardar_promociones(client, sucursal, fecha_str, filas)
+            db.marcar_no_enviado(client, sucursal, fecha_str)
             st.success("Guardado.")
             st.rerun()
         ingreso_promo = total_promo
@@ -278,7 +344,7 @@ if es_admin:
             if filas:
                 df = pd.DataFrame(filas)
                 columnas = ["sucursal", "fecha", "ventas", "consultas", "dental",
-                            "total_ingresos", "total_gastos", "total_general"]
+                            "total_ingresos", "total_gastos", "total_general", "enviado"]
                 st.dataframe(df[columnas], use_container_width=True)
                 st.download_button(
                     "Descargar CSV", df[columnas].to_csv(index=False).encode("utf-8"),

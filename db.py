@@ -31,7 +31,7 @@ def obtener_corte(client, sucursal: str, fecha: str) -> dict | None:
 
 
 def guardar_corte(client, sucursal: str, fecha: str, campos: dict, gastos: list) -> int:
-    payload = {**campos, "sucursal": sucursal, "fecha": fecha}
+    payload = {**campos, "sucursal": sucursal, "fecha": fecha, "enviado": False}
     res = client.table("cortes").upsert(payload, on_conflict="fecha,sucursal").execute()
     corte_id = res.data[0]["id"]
     client.table("gastos").delete().eq("corte_id", corte_id).execute()
@@ -52,6 +52,17 @@ def listar_cortes_rango(client, fecha_ini: str, fecha_fin: str) -> list:
     return res.data
 
 
+def marcar_enviado(client, sucursal: str, fecha: str) -> None:
+    import datetime
+    ahora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    client.table("cortes").update({"enviado": True, "enviado_en": ahora}).eq("sucursal", sucursal).eq("fecha", fecha).execute()
+
+
+def marcar_no_enviado(client, sucursal: str, fecha: str) -> None:
+    """Si ya se había mandado el día y alguien edita Estadísticas después, deja de contar como enviado."""
+    client.table("cortes").update({"enviado": False}).eq("sucursal", sucursal).eq("fecha", fecha).execute()
+
+
 # ── Estadísticas: detalle (Primera Vez / Mostrador) por médico × canal ──
 
 def obtener_detalle(client, sucursal: str, fecha: str, categoria: str) -> dict:
@@ -69,16 +80,47 @@ def obtener_detalle(client, sucursal: str, fecha: str, categoria: str) -> dict:
     return completo
 
 
-def guardar_detalle(client, sucursal: str, fecha: str, categoria: str, filas: dict) -> None:
-    """filas: {(medico_tipo, canal): {"px":.., "ingreso":..}}"""
+def guardar_detalle(client, sucursal: str, fecha: str, categoria: str, filas: dict, medicos_seleccionados: list) -> None:
+    """filas: {(medico_tipo, canal): {"px":.., "ingreso":..}} — solo de los turnos seleccionados.
+    Borra cualquier fila vieja de turnos que ya no estén seleccionados, para no dejar basura."""
+    if medicos_seleccionados:
+        client.table("estadisticas_detalle").delete().eq("sucursal", sucursal).eq("fecha", fecha).eq(
+            "categoria", categoria
+        ).not_.in_("medico_tipo", medicos_seleccionados).execute()
+    else:
+        client.table("estadisticas_detalle").delete().eq("sucursal", sucursal).eq("fecha", fecha).eq(
+            "categoria", categoria
+        ).execute()
+
     payload = [
         {"sucursal": sucursal, "fecha": fecha, "categoria": categoria,
          "medico_tipo": medico, "canal": canal, "px": datos["px"], "ingreso": datos["ingreso"]}
         for (medico, canal), datos in filas.items()
+        if medico in medicos_seleccionados
     ]
-    client.table("estadisticas_detalle").upsert(
-        payload, on_conflict="fecha,sucursal,categoria,medico_tipo,canal"
-    ).execute()
+    if payload:
+        client.table("estadisticas_detalle").upsert(
+            payload, on_conflict="fecha,sucursal,categoria,medico_tipo,canal"
+        ).execute()
+
+
+def medicos_con_datos(client, sucursal: str, fecha: str) -> list:
+    """Turnos que ya tienen algo guardado ese día (para preseleccionar el multiselect)."""
+    res = (
+        client.table("estadisticas_detalle").select("medico_tipo")
+        .eq("sucursal", sucursal).eq("fecha", fecha)
+        .execute()
+    )
+    return sorted(set(r["medico_tipo"] for r in res.data))
+
+
+def existe_estadisticas_del_dia(client, sucursal: str, fecha: str) -> bool:
+    """True si hay al menos un dato guardado en cualquiera de las 3 tablas de Estadísticas ese día."""
+    for tabla in ("estadisticas_detalle", "estadisticas_agregado", "estadisticas_promociones"):
+        res = client.table(tabla).select("id").eq("sucursal", sucursal).eq("fecha", fecha).limit(1).execute()
+        if res.data:
+            return True
+    return False
 
 
 # ── Estadísticas: agregado (Subsecuentes / Revisiones) ──────────────────
