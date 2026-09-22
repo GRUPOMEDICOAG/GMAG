@@ -31,13 +31,13 @@ st.markdown(
 # ──────────────────────────────────────────────────────────────────────────
 
 if not auth.esta_autenticado():
-    st.caption("Inicia sesión con el correo y contraseña que te dio tu administrador.")
+    st.caption("Inicia sesión con el usuario y contraseña que te dio tu administrador.")
     with st.form("form_login"):
-        correo = st.text_input("Correo")
+        usuario = st.text_input("Usuario")
         password = st.text_input("Contraseña", type="password")
         entrar = st.form_submit_button("Iniciar sesión", type="primary")
     if entrar:
-        ok, error = auth.iniciar_sesion(correo, password)
+        ok, error = auth.iniciar_sesion(usuario, password)
         if ok:
             st.rerun()
         else:
@@ -269,11 +269,17 @@ with tabs[1]:
         ingreso_rev = _agregado("REV", "Revisiones", "rev")
 
     with sub[4]:
-        catalogo = db.obtener_catalogo_promociones(client)
-        nombres_catalogo = [p["nombre"] for p in catalogo]
-        precios_catalogo = {p["nombre"]: p["precio"] for p in catalogo}
+        nombres_catalogo = db.obtener_nombres_promociones(client)
+        precios_catalogo = db.obtener_precios_vigentes_en_fecha(client, fecha_str)
         if not nombres_catalogo:
             st.info("No hay promociones en el catálogo todavía — un Admin puede agregarlas en la pestaña Admin.")
+        else:
+            sin_precio_esa_fecha = [n for n in nombres_catalogo if n not in precios_catalogo]
+            if sin_precio_esa_fecha:
+                st.caption(
+                    f"⚠️ Sin precio vigente para el {fecha_str}: {', '.join(sin_precio_esa_fecha)} "
+                    "(captúralo con importe manual, o pide que Admin agregue su precio para esa fecha)."
+                )
 
         promos_previas = db.obtener_promociones(client, sucursal, fecha_str)
         df_promos_ini = (
@@ -354,23 +360,36 @@ if es_admin:
                 st.info("No hay cortes guardados en ese rango.")
 
         st.divider()
-        st.markdown("**Catálogo de Promociones**")
-        catalogo = db.obtener_catalogo_promociones(client)
-        for p in catalogo:
-            cc1, cc2, cc3 = st.columns([3, 1, 1])
-            cc1.write(p["nombre"])
-            cc2.write(f"${p['precio']:,.2f}")
-            if cc3.button("Eliminar", key=f"eliminar_promo_{p['id']}"):
-                db.eliminar_promocion_catalogo(client, p["id"])
-                st.rerun()
+        st.markdown("**Historial de precios de Promociones**")
+        st.caption(
+            "Cada promoción puede tener varios precios a lo largo del tiempo. Al capturar una "
+            "venta, la app usa el precio que estaba vigente en la fecha capturada — no el actual. "
+            "Para subir un precio, agrega una fila nueva con la fecha desde la que aplica; no edites "
+            "las anteriores, así el histórico de ventas pasadas se queda correcto."
+        )
+        historial = db.listar_historial_precios(client)
+        if historial:
+            for p in historial:
+                hc1, hc2, hc3, hc4 = st.columns([3, 1.2, 1.2, 1])
+                hc1.write(p["nombre"])
+                hc2.write(f"${p['precio']:,.2f}")
+                hc3.write(f"desde {p['vigente_desde']}")
+                if hc4.button("Eliminar", key=f"eliminar_precio_{p['id']}"):
+                    db.eliminar_precio_promocion(client, p["id"])
+                    st.rerun()
+        else:
+            st.caption("Todavía no hay ninguna promoción con precio definido.")
 
-        with st.form("form_nueva_promo"):
-            nc1, nc2 = st.columns([3, 1])
-            nombre_nuevo = nc1.text_input("Nombre de la promoción")
+        with st.form("form_nuevo_precio"):
+            nc1, nc2, nc3 = st.columns([3, 1.2, 1.2])
+            nombre_nuevo = nc1.text_input("Promoción (nueva o existente)")
             precio_nuevo = nc2.number_input("Precio", min_value=0.0, step=0.01, format="%.2f")
-            if st.form_submit_button("Agregar al catálogo"):
+            vigente_desde_nuevo = nc3.date_input("Vigente desde", value=datetime.date.today())
+            if st.form_submit_button("Agregar precio"):
                 if nombre_nuevo.strip():
-                    db.agregar_promocion_catalogo(client, nombre_nuevo.strip(), precio_nuevo)
+                    db.agregar_precio_promocion(
+                        client, nombre_nuevo.strip(), precio_nuevo, vigente_desde_nuevo.isoformat()
+                    )
                     st.rerun()
                 else:
                     st.error("Escribe un nombre.")

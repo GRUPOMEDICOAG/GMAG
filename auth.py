@@ -15,6 +15,22 @@ from __future__ import annotations
 import streamlit as st
 from supabase import create_client, Client
 
+# Para sucursales: "PRADOS_BASE" se convierte internamente en
+# "prados_base@gmag.local" antes de mandarlo a Supabase — ese dominio no
+# existe de verdad, pero con Auto Confirm + contraseña Supabase nunca le
+# intenta mandar nada, así que no hace falta que sea alcanzable.
+# Para Admin: si ya escribes un correo real (con "@", ej. admin@grupomedicoag.com),
+# se usa tal cual — no se le agrega el dominio interno.
+DOMINIO_INTERNO = "gmag.local"
+
+
+def _correo_desde_usuario(usuario: str) -> str:
+    usuario = usuario.strip().lower()
+    if "@" in usuario:
+        return usuario
+    return f"{usuario}@{DOMINIO_INTERNO}"
+
+
 def get_client() -> Client:
     if "supabase_client" not in st.session_state:
         st.session_state.supabase_client = create_client(
@@ -27,15 +43,16 @@ def esta_autenticado() -> bool:
     return "perfil" in st.session_state and st.session_state.perfil is not None
 
 
-def iniciar_sesion(correo: str, password: str) -> tuple[bool, str]:
+def iniciar_sesion(usuario: str, password: str) -> tuple[bool, str]:
     client = get_client()
+    correo = _correo_desde_usuario(usuario)
     try:
         resultado = client.auth.sign_in_with_password({"email": correo, "password": password})
-    except Exception as e:
-        return False, "Correo o contraseña incorrectos."
+    except Exception:
+        return False, "Usuario o contraseña incorrectos."
 
     if not resultado.user:
-        return False, "Correo o contraseña incorrectos."
+        return False, "Usuario o contraseña incorrectos."
 
     perfil_resp = client.table("perfiles").select("*").eq("id", resultado.user.id).execute()
     if not perfil_resp.data:

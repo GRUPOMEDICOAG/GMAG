@@ -167,19 +167,46 @@ def guardar_promociones(client, sucursal: str, fecha: str, filas: list) -> None:
         client.table("estadisticas_promociones").insert(payload).execute()
 
 
-# ── Catálogo de promociones (compartido entre sucursales) ───────────────
+# ── Historial de precios de promociones (con vigencia por fecha) ────────
 
-def obtener_catalogo_promociones(client) -> list:
-    res = client.table("promociones_catalogo").select("*").order("nombre").execute()
+def obtener_nombres_promociones(client) -> list:
+    """Todos los nombres de promoción que alguna vez han tenido un precio,
+    para el desplegable — sin importar si su precio actual aplica hoy."""
+    res = client.table("promociones_precios").select("nombre").execute()
+    return sorted(set(r["nombre"] for r in res.data))
+
+
+def obtener_precios_vigentes_en_fecha(client, fecha: str) -> dict:
+    """Para cada promoción, el precio que estaba vigente en esa fecha
+    (el de 'vigente_desde' más reciente que no sea posterior a 'fecha').
+    Si una promoción no tenía ningún precio definido todavía en esa fecha,
+    no aparece en el resultado (no truena, solo no se autocalcula su $)."""
+    res = (
+        client.table("promociones_precios").select("*")
+        .lte("vigente_desde", fecha)
+        .order("vigente_desde", desc=True)
+        .execute()
+    )
+    vigentes = {}
+    for fila in res.data:
+        if fila["nombre"] not in vigentes:  # el primero que aparece por nombre es el más reciente <= fecha
+            vigentes[fila["nombre"]] = fila["precio"]
+    return vigentes
+
+
+def agregar_precio_promocion(client, nombre: str, precio: float, vigente_desde: str) -> None:
+    client.table("promociones_precios").insert({
+        "nombre": nombre, "precio": precio, "vigente_desde": vigente_desde,
+    }).execute()
+
+
+def listar_historial_precios(client) -> list:
+    res = client.table("promociones_precios").select("*").order("nombre").order("vigente_desde", desc=True).execute()
     return res.data
 
 
-def agregar_promocion_catalogo(client, nombre: str, precio: float) -> None:
-    client.table("promociones_catalogo").upsert({"nombre": nombre, "precio": precio}, on_conflict="nombre").execute()
-
-
-def eliminar_promocion_catalogo(client, promo_id: int) -> None:
-    client.table("promociones_catalogo").delete().eq("id", promo_id).execute()
+def eliminar_precio_promocion(client, precio_id: int) -> None:
+    client.table("promociones_precios").delete().eq("id", precio_id).execute()
 
 
 # ── Totales / cuadre ─────────────────────────────────────────────────────
