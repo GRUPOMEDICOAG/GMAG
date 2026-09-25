@@ -82,3 +82,12 @@ def sucursal_actual() -> str:
 
 def es_admin() -> bool:
     return st.session_state.perfil.get("rol") == "admin"
+
+
+def usuario_actual_id() -> str:
+    """Correo (o usuario interno) de quien tiene la sesión — para dejar
+    constancia de quién hizo una corrección."""
+    try:
+        return st.session_state.usuario.email
+    except Exception:
+        return "desconocido"
